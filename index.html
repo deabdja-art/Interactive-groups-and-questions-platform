@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>منصة الأنشطة والتوزيع العشوائي للمجموعات</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Tajawal', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+  <!-- React & Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const compressImage = (file, callback) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 600;
+          if (width > height && width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          callback(dataUrl);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    };
+
+    function App() {
+      const [view, setView] = useState('home');
+      const [groupCount, setGroupCount] = useState(4);
+      const [questions, setQuestions] = useState({});
+      const [activityId, setActivityId] = useState('');
+      const [shareUrl, setShareUrl] = useState('');
+      
+      const [studentName, setStudentName] = useState('');
+      const [assignedGroup, setAssignedGroup] = useState(null);
+      const [studentAnswer, setStudentAnswer] = useState('');
+      const [isSubmitted, setIsSubmitted] = useState(false);
+      
+      const [submissions, setSubmissions] = useState([]);
+      const [teacherGrading, setTeacherGrading] = useState({});
+
+      useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const dataParam = urlParams.get('act');
+        
+        if (dataParam) {
+          try {
+            const decoded = JSON.parse(decodeURIComponent(escape(atob(dataParam))));
+            setGroupCount(decoded.groupCount);
+            setQuestions(decoded.questions);
+            setActivityId(decoded.id);
+            setView('student_join');
+          } catch(e) {
+            console.error(e);
+          }
+        }
+
+        const handleStorage = () => {
+          if (activityId) {
+            const saved = localStorage.getItem(`act_sub_${activityId}`);
+            if (saved) setSubmissions(JSON.parse(saved));
+            const savedGrading = localStorage.getItem(`act_grade_${activityId}`);
+            if (savedGrading) setTeacherGrading(JSON.parse(savedGrading));
+          }
+        };
+
+        window.addEventListener('storage', handleStorage);
+        return () => window.removeEventListener('storage', handleStorage);
+      }, [activityId]);
+
+      const handleStartSetup = (count) => {
+        setGroupCount(count);
+        const initialQ = {};
+        for (let i = 1; i <= count; i++) {
+          initialQ[i] = { text: '', image: '' };
+        }
+        setQuestions(initialQ);
+        setView('teacher_setup');
+      };
+
+      const handleQuestionChange = (grp, text) => {
+        setQuestions(prev => ({
+          ...prev,
+          [grp]: { ...prev[grp], text }
+        }));
+      };
+
+      const handleImageUpload = (grp, file) => {
+        if (!file) return;
+        compressImage(file, (compressedBase64) => {
+          setQuestions(prev => ({
+            ...prev,
+            [grp]: { ...prev[grp], image: compressedBase64 }
+          }));
+        });
+      };
+
+      const handleCreateActivity = (e) => {
+        if (e) e.preventDefault();
+        
+        for (let i = 1; i <= groupCount; i++) {
+          if (!questions[i]?.text.trim() && !questions[i]?.image) {
+            alert(`الرجاء إدخال سؤال أو إضافة صورة للمجموعة رقم ${i}`);
+            return;
+          }
+        }
+
+        const newId = 'act_' + Math.random().toString(36).substr(2, 7);
+        setActivityId(newId);
+
+        const payload = {
+          id: newId,
+          groupCount,
+          questions
+        };
+
+        try {
+          const jsonStr = JSON.stringify(payload);
+          const encoded = btoa(unescape(encodeURIComponent(jsonStr)));
+          const link = window.location.origin + window.location.pathname + '?act=' + encoded;
+          setShareUrl(link);
+          setView('teacher_dashboard');
+        } catch (err) {
+          alert("حدث خطأ أثناء حفظ النشاط، يرجى المحاولة بصور أصغر حجماً.");
+        }
+      };
+
+      const handleStudentJoin = (e) => {
+        e.preventDefault();
+        if (!studentName.trim()) return;
+
+        const savedSubmissions = JSON.parse(localStorage.getItem(`act_sub_${activityId}`) || '[]');
+        const counts = {};
+        for (let i = 1; i <= groupCount; i++) counts[i] = 0;
+
+        savedSubmissions.forEach(sub => {
+          if (counts[sub.group] !== undefined) counts[sub.group]++;
+        });
+
+        let minVal = Infinity;
+        Object.values(counts).forEach(c => { if (c < minVal) minVal = c; });
+
+        const minGroups = Object.keys(counts).filter(g => counts[g] === minVal);
+        const randomAssigned = minGroups[Math.floor(Math.random() * minGroups.length)];
+
+        setAssignedGroup(Number(randomAssigned));
+
+        const existing = savedSubmissions.find(s => s.name === studentName.trim() && s.group === Number(randomAssigned));
+        if (existing) {
+          setStudentAnswer(existing.answer);
+          setIsSubmitted(true);
+        }
+
+        setView('student_room');
+      };
+
+      const handleSubmitAnswer = () => {
+        if (!studentAnswer.trim()) return;
+
+        const currentSubs = JSON.parse(localStorage.getItem(`act_sub_${activityId}`) || '[]');
+        const newSubmission = {
+          id: Date.now(),
+          name: studentName.trim(),
+          group: assignedGroup,
+          answer: studentAnswer,
+          time: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })
+        };
+
+        const updated = [...currentSubs.filter(s => s.name !== studentName.trim()), newSubmission];
+        localStorage.setItem(`act_sub_${activityId}`, JSON.stringify(updated));
+        setSubmissions(updated);
+        setIsSubmitted(true);
+
+        window.dispatchEvent(new Event('storage'));
+      };
+
+      const handleGradeSubmit = (studentId, gradeText, score) => {
+        const currentGrades = JSON.parse(localStorage.getItem(`act_grade_${activityId}`) || '{}');
+        currentGrades[studentId] = { feedback: gradeText, score: score };
+        localStorage.setItem(`act_grade_${activityId}`, JSON.stringify(currentGrades));
+        setTeacherGrading(currentGrades);
+        window.dispatchEvent(new Event('storage'));
+      };
+
+      return (
+        <div className="max-w-4xl mx-auto p-4 md:p-6 my-4">
+          <header className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-6 text-white text-center shadow-lg mb-8">
+            <h1 className="text-2xl md:text-3xl font-extrabold mb-2">منصة الأنشطة والتوزيع الذكي للمجموعات</h1>
+            <p className="opacity-90 text-sm md:text-base">توزيع الطلاب عشوائياً وبشكل متكافئ مع التصحيح الفوري للمُعلم</p>
+          </header>
+
+          {view === 'home' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center space-y-6">
+              <h2 className="text-xl font-bold text-slate-800">أهلاً بك عزيزي المعلم / المعلمة 👋</h2>
+              <p className="text-slate-600">اختر عدد المجموعات للبدء في إعداد الأسئلة وتوليد رابط الطلاب:</p>
+              
+              <div className="flex flex-wrap justify-center gap-4 py-4">
+                {[4, 5, 6].map(num => (
+                  <button
+                    key={num}
+                    onClick={() => handleStartSetup(num)}
+                    className="w-28 h-28 bg-indigo-50 border-2 border-indigo-200 hover:border-indigo-600 hover:bg-indigo-600 hover:text-white transition-all rounded-2xl font-bold text-2xl flex flex-col items-center justify-center gap-1 shadow-sm active:scale-95"
+                  >
+                    <span>{num}</span>
+                    <span className="text-xs font-normal">مجموعات</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {view === 'teacher_setup' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-6">
+              <div className="flex justify-between items-center border-b pb-4">
+                <h2 className="text-lg font-bold text-slate-800">إدخال أسئلة المجموعات ({groupCount} مجموعات)</h2>
+                <button 
+                  onClick={() => setView('home')}
+                  className="text-xs text-slate-500 hover:text-slate-800"
+                >
+                  إلغاء والعودة
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {Array.from({ length: groupCount }, (_, i) => i + 1).map(grp => (
+                  <div key={grp} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="bg-indigo-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold">
+                        {grp}
+                      </span>
+                      <h3 className="font-bold text-slate-700">المجموعة رقم {grp}</h3>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">السؤال النصي:</label>
+                      <textarea
+                        value={questions[grp]?.text || ''}
+                        onChange={(e) => handleQuestionChange(grp, e.target.value)}
+                        placeholder={`اكتب السؤال المخصص للمجموعة ${grp} هنا...`}
+                        className="w-full p-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 text-sm outline-none transition"
+                        rows="2"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">إدراج صورة (اختياري):</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(grp, e.target.files[0])}
+                        className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                      />
+                      {questions[grp]?.image && (
+                        <div className="mt-2 relative w-32 h-20 rounded-lg overflow-hidden border border-slate-200">
+                          <img src={questions[grp].image} alt="معاينة" className="w-full h-full object-cover" />
+                          <button
+                            onClick={() => handleQuestionChange(grp, questions[grp].text, setQuestions(prev => ({...prev, [grp]: {...prev[grp], image: ''}})))}
+                            className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 text-xs"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                onClick={handleCreateActivity}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold py-3.5 rounded-xl shadow-md transition-all text-center block text-base cursor-pointer"
+              >
+                🚀 إنشاء النشاط وتوليد الرابط
+              </button>
+            </div>
+          )}
+
+          {view === 'teacher_dashboard' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm space-y-4">
+                <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                  <span>🔗</span> رابط المشاركة مع الطلاب:
+                </h2>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={shareUrl}
+                    className="flex-1 bg-slate-50 border border-slate-300 p-3 rounded-xl text-xs sm:text-sm text-slate-600 select-all outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(shareUrl);
+                      alert('تم نسخ الرابط بنجاح! يمكنك الآن إرساله للطلاب.');
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-xl font-bold text-sm shrink-0 transition"
+                  >
+                    نسخ الرابط
+                  </button>
+                </div>
+                <div className="flex justify-between items-center text-xs text-slate-500 pt-2 border-t">
+                  <span>سيتم توزيع الطلاب عشوائياً وبشكل متساوٍ عند فتحهم للرابط.</span>
+                  <button
+                    onClick={() => window.open(shareUrl, '_blank')}
+                    className="text-indigo-600 hover:underline font-bold"
+                  >
+                    تجربة فتح الرابط كطالب ↗
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm space-y-6">
+                <div className="flex justify-between items-center border-b pb-4">
+                  <h2 className="font-bold text-slate-800 text-lg">إجابات الطلاب اللحظية</h2>
+                  <span className="text-xs bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full font-medium animate-pulse">
+                    مزامنة فورية نشطة
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {Array.from({ length: groupCount }, (_, i) => i + 1).map(grp => {
+                    const groupSubs = submissions.filter(s => s.group === grp);
+                    return (
+                      <div key={grp} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
+                        <div className="flex justify-between items-center border-b pb-2">
+                          <span className="font-bold text-indigo-700">المجموعة {grp}</span>
+                          <span className="text-xs text-slate-500 bg-white px-2 py-1 rounded border">
+                            عدد الطلاب: {groupSubs.length}
+                          </span>
+                        </div>
+
+                        <div className="text-xs bg-white p-2.5 rounded border border-slate-100 text-slate-600">
+                          <strong>السؤال:</strong> {questions[grp]?.text || 'صورة مرفقة'}
+                        </div>
+
+                        {groupSubs.length === 0 ? (
+                          <p className="text-xs text-slate-400 text-center py-4">في انتظار انضمام وإجابة الطلاب...</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {groupSubs.map(sub => {
+                              const currentGrade = teacherGrading[sub.id] || {};
+                              return (
+                                <div key={sub.id} className="bg-white p-3 rounded-lg border border-slate-200 space-y-2 text-xs">
+                                  <div className="flex justify-between font-bold text-slate-800">
+                                    <span>👤 الطالب: {sub.name}</span>
+                                    <span className="text-slate-400 font-normal">{sub.time}</span>
+                                  </div>
+                                  <div className="bg-slate-50 p-2 rounded text-slate-700 border">
+                                    <strong>الإجابة:</strong> {sub.answer}
+                                  </div>
+
+                                  <div className="pt-2 border-t space-y-2">
+                                    <div className="flex gap-2">
+                                      <input
+                                        type="text"
+                                        placeholder="إضافة ملاحظة/تصحيح..."
+                                        defaultValue={currentGrade.feedback || ''}
+                                        id={`feedback_${sub.id}`}
+                                        className="flex-1 p-1.5 border rounded text-xs outline-none"
+                                      />
+                                      <select
+                                        id={`score_${sub.id}`}
+                                        defaultValue={currentGrade.score || 'ممتاز'}
+                                        className="border rounded p-1 text-xs"
+                                      >
+                                        <option value="ممتاز">ممتاز ⭐</option>
+                                        <option value="جيد جداً">جيد جداً 👍</option>
+                                        <option value="يحتاج مراجعة">يحتاج مراجعة 📝</option>
+                                      </select>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        const fb = document.getElementById(`feedback_${sub.id}`).value;
+                                        const sc = document.getElementById(`score_${sub.id}`).value;
+                                        handleGradeSubmit(sub.id, fb, sc);
+                                        alert('تم إرسال التصحيح للطالب بنجاح');
+                                      }}
+                                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-1 rounded font-bold transition"
+                                    >
+                                      حفظ وإرسال التصحيح
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === 'student_join' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 max-w-md mx-auto space-y-6 text-center">
+              <h2 className="text-xl font-bold text-slate-800">الانضمام للنشاط</h2>
+              <p className="text-xs text-slate-500">أدخل اسمك للانضمام إلى إحدى المجموعات المتاحة تلقائياً:</p>
+
+              <form onSubmit={handleStudentJoin} className="space-y-4">
+                <input
+                  type="text"
+                  required
+                  placeholder="اكتب اسمك الثلاثي..."
+                  value={studentName}
+                  onChange={(e) => setStudentName(e.target.value)}
+                  className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-center font-medium"
+                />
+                <button
+                  type="submit"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow transition"
+                >
+                  انضمام للمجموعة 🎲
+                </button>
+              </form>
+            </div>
+          )}
+
+          {view === 'student_room' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-6">
+              <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex justify-between items-center">
+                <div>
+                  <span className="text-xs text-indigo-600 font-bold block">مجموعتك المحددة:</span>
+                  <h3 className="text-xl font-extrabold text-indigo-900">المجموعة رقم ({assignedGroup})</h3>
+                </div>
+                <div className="text-left">
+                  <span className="text-xs text-slate-500 block">الطالب:</span>
+                  <span className="font-bold text-slate-700">{studentName}</span>
+                </div>
+              </div>
+
+              <div className="p-4 border border-slate-200 rounded-xl space-y-3 bg-slate-50/50">
+                <h4 className="font-bold text-slate-700 text-sm">سؤال المجموعة:</h4>
+                {questions[assignedGroup]?.text && (
+                  <p className="text-base font-semibold text-slate-800 bg-white p-3 rounded-lg border border-slate-100">
+                    {questions[assignedGroup].text}
+                  </p>
+                )}
+                {questions[assignedGroup]?.image && (
+                  <div className="rounded-lg overflow-hidden border border-slate-200 max-h-72 flex justify-center bg-black/5">
+                    <img src={questions[assignedGroup].image} alt="سؤال المجموعة" className="object-contain max-h-72" />
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <label className="block text-sm font-bold text-slate-700">إجابتك:</label>
+                <textarea
+                  disabled={isSubmitted}
+                  value={studentAnswer}
+                  onChange={(e) => setStudentAnswer(e.target.value)}
+                  placeholder="اكتب إجابتك هنا بوضوح..."
+                  rows="4"
+                  className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-slate-100 text-sm"
+                />
+
+                {!isSubmitted ? (
+                  <button
+                    onClick={handleSubmitAnswer}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow transition"
+                  >
+                    إرسال الإجابة للمعلم 🚀
+                  </button>
+                ) : (
+                  <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-emerald-800 text-center text-xs font-bold">
+                    ✓ تم إرسال إجابتك بنجاح!
+                  </div>
+                )}
+              </div>
+
+              {(() => {
+                const mySub = submissions.find(s => s.name === studentName && s.group === assignedGroup);
+                const myGrade = mySub ? teacherGrading[mySub.id] : null;
+
+                if (!myGrade) return null;
+
+                return (
+                  <div className="mt-6 bg-purple-50 border border-purple-200 rounded-xl p-4 space-y-2 animate-fade-in">
+                    <h4 className="font-bold text-purple-900 text-sm flex items-center gap-2">
+                      <span>📝</span> تصحيح وملاحظات المعلم:
+                    </h4>
+                    <div className="flex justify-between items-center bg-white p-3 rounded-lg border border-purple-100">
+                      <span className="text-xs text-slate-700">{myGrade.feedback || 'لا توجد ملاحظات إضافية'}</span>
+                      <span className="bg-purple-600 text-white text-xs font-bold px-3 py-1 rounded-full">
+                        التقييم: {myGrade.score}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
